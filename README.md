@@ -22,14 +22,23 @@ $ dustoff scan --orphans --projects ~/code
 * `clean` shows every item, lets you pick, shows the final list with the exact
   action, and only proceeds if you type `yes`. No `--yes` flag, and it refuses to
   run without an interactive terminal.
-* Only paths inside `$HOME`, at least two levels deep, are ever touched.
-  Symlinks are removed, never followed.
+* Only paths inside `$HOME`, at least two levels deep, are ever touched, after
+  resolving symlinks in parent directories (a symlink pointing outside your home
+  is refused). A symlink that is itself the target is removed, never followed.
+  Credentials and key material (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`,
+  keyrings, ...) are never targets, and dustoff refuses to run as root.
+* Rules you add yourself are untrusted: they always count as `review`, are
+  labelled `[user rule]`, and may not use shells or interpreters as commands.
+* Names shown in the terminal have control characters stripped, so a hostile
+  directory name cannot forge the list you confirm.
 * Items marked `review` (your trash, ML models, orphaned app data) are never
   selected by `all`; you must pick them by number.
 * Caches of a running app are skipped (`'chrome' is running`).
 * When a tool has its own cleanup command (`uv cache clean`, `npm cache clean`,
   `go clean -cache`, `pnpm store prune`, ...), dustoff runs that instead of
-  deleting files. `--no-commands` forces direct deletion.
+  deleting files. They run from your home directory with a minimal environment,
+  so redirected cache variables cannot point them elsewhere. `--no-commands`
+  forces direct deletion. Sizes are disk usage (hard links counted once).
 
 ## What it finds
 

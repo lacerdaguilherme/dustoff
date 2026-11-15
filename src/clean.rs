@@ -1,13 +1,13 @@
 //! Selection parsing and the (only) code path that removes anything.
 
 use crate::rules::Risk;
-use crate::safety::is_safe_target;
-use crate::scan::{Finding, path_size};
-use anyhow::{Result, bail};
+use crate::safety::{clean_text, is_safe_target_depth, trusted_path_dirs, which};
+use crate::scan::{Finding, comm_name, path_size};
+use anyhow::{Context, Result, bail};
 use std::collections::HashSet;
 use std::io;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 /// Parse a user selection against the shown table.
 /// `a`/`all` = every *safe*, non-blocked item; `1,3-5` = explicit 1-based items
@@ -85,21 +85,43 @@ pub fn delete_path(p: &Path) -> io::Result<()> {
     }
 }
 
-fn run_command(cmd: &[String]) -> Result<()> {
-    let out = Command::new(&cmd[0]).args(&cmd[1..]).output()?;
+/// Environment a tool command may see. Everything else (GOMODCACHE,
+/// UV_CACHE_DIR, npm_config_*, ...) is dropped so the command cleans the
+/// default location shown to the user, not somewhere redirected.
+const COMMAND_ENV: &[&str] = &[
+    "HOME",
+    "USER",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+];
+
+fn run_command(cmd: &[String], home: &Path) -> Result<()> {
+    let bin =
+        which(&cmd[0]).with_context(|| format!("'{}' not found on a trusted PATH", cmd[0]))?;
+    let mut c = Command::new(bin);
+    c.args(&cmd[1..])
+        .current_dir(home)
+        .env_clear()
+        .stdin(Stdio::null());
+    for k in COMMAND_ENV {
+        if let Some(v) = std::env::var_os(k) {
+            c.env(k, v);
+        }
+    }
+    if let Ok(p) = std::env::join_paths(trusted_path_dirs()) {
+        c.env("PATH", p);
+    }
+    let out = c.output()?;
     if out.status.success() {
         return Ok(());
     }
-    let err = String::from_utf8_lossy(&out.stderr);
-    let tail: String = err
-        .lines()
-        .rev()
-        .take(3)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>()
-        .join(" | ");
+    let err = clean_text(&String::from_utf8_lossy(&out.stderr));
+    let tail = err.lines().rev().take(3).collect::<Vec<_>>();
+    let tail = tail.into_iter().rev().collect::<Vec<_>>().join(" | ");
     bail!("`{}` exited with {}: {tail}", cmd.join(" "), out.status)
 }
 
@@ -108,48 +130,63 @@ pub struct Outcome {
     pub path: std::path::PathBuf,
     pub freed: u64,
     pub error: Option<String>,
+    pub warning: Option<String>,
 }
 
-/// Execute the selected findings. Findings with a `via_command` run that
-/// command once (shared by every finding of the same rule); the rest are
-/// deleted. Re-checks safety right before touching anything.
-pub fn execute(selected: &[&Finding], home: &Path) -> Vec<Outcome> {
-    let mut ran: HashSet<Vec<String>> = HashSet::new();
-    let mut cmd_err: std::collections::HashMap<Vec<String>, String> = Default::default();
+fn all_paths(f: &Finding) -> impl Iterator<Item = &std::path::PathBuf> {
+    std::iter::once(&f.path).chain(f.also_paths.iter())
+}
+
+fn total_size(f: &Finding) -> u64 {
+    all_paths(f)
+        .filter(|p| p.symlink_metadata().is_ok())
+        .map(|p| path_size(p))
+        .sum()
+}
+
+/// Execute the selected findings. A finding with a `via_command` runs the
+/// tool's own command (cwd = home, minimal environment); the rest are deleted.
+/// Everything is re-checked right before it is touched: path safety, and that
+/// no guarded application started after the scan.
+pub fn execute(selected: &[&Finding], home: &Path, running: &HashSet<String>) -> Vec<Outcome> {
     let mut out = Vec::new();
     for f in selected {
         let mut outcome = Outcome {
             path: f.path.clone(),
             freed: 0,
             error: None,
+            warning: None,
         };
-        if f.blocked_by.is_some() || !is_safe_target(&f.path, home) {
+        let depth = if f.category == "orphan-config" { 1 } else { 2 };
+        if f.blocked_by.is_some() || !all_paths(f).all(|p| is_safe_target_depth(p, home, depth)) {
             outcome.error = Some("refused: blocked or outside the safe area".into());
             out.push(outcome);
             continue;
         }
-        let before = path_size(&f.path);
+        if let Some(g) = f.guards.iter().find(|g| running.contains(&comm_name(g))) {
+            outcome.error = Some(format!("refused: '{g}' started since the scan"));
+            out.push(outcome);
+            continue;
+        }
+        let before = total_size(f);
         let result = match &f.via_command {
-            Some(cmd) => {
-                if ran.insert(cmd.clone())
-                    && let Err(e) = run_command(cmd)
-                {
-                    cmd_err.insert(cmd.clone(), e.to_string());
-                }
-                match cmd_err.get(cmd) {
-                    Some(e) => Err(e.clone()),
-                    None => Ok(()),
-                }
-            }
-            None => delete_path(&f.path).map_err(|e| e.to_string()),
+            Some(cmd) => run_command(cmd, home).map_err(|e| e.to_string()),
+            None => all_paths(f)
+                .map(|p| match delete_path(p) {
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+                    other => other.map_err(|e| format!("{}: {}", e.kind(), e)),
+                })
+                .collect::<Result<Vec<()>, String>>()
+                .map(|_| ()),
         };
         match result {
             Ok(()) => {
-                outcome.freed = before.saturating_sub(if f.path.exists() {
-                    path_size(&f.path)
-                } else {
-                    0
-                })
+                outcome.freed = before.saturating_sub(total_size(f));
+                if f.via_command.is_some() && outcome.freed == 0 {
+                    outcome.warning = Some(
+                        "the command succeeded but nothing was freed at the listed path (the tool may use another location)".into(),
+                    );
+                }
             }
             Err(e) => outcome.error = Some(e),
         }
@@ -175,6 +212,8 @@ mod tests {
             regrows: String::new(),
             note: String::new(),
             via_command: None,
+            also_paths: Vec::new(),
+            guards: Vec::new(),
         }
     }
 
@@ -211,6 +250,7 @@ mod tests {
         assert!(parse_selection("1", &items).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn deletes_read_only_tree_and_never_follows_symlinks() {
         use std::os::unix::fs::{PermissionsExt, symlink};
@@ -235,11 +275,80 @@ mod tests {
     }
 
     #[test]
-    fn execute_refuses_unsafe_paths() {
+    fn execute_refuses_paths_outside_home() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("a/b")).unwrap();
         let mut f = item(Risk::Safe, false);
-        f.path = "/etc".into();
-        let out = execute(&[&f], Path::new("/home/u"));
+        f.path = outside.path().join("a/b");
+        let out = execute(&[&f], home.path(), &HashSet::new());
         assert!(out[0].error.is_some());
-        assert!(Path::new("/etc").exists());
+        assert!(f.path.exists(), "must not be deleted");
+    }
+
+    #[test]
+    fn execute_refuses_when_guarded_app_started_after_scan() {
+        let home = tempfile::tempdir().unwrap();
+        let p = home.path().join(".cache/x");
+        std::fs::create_dir_all(&p).unwrap();
+        let mut f = item(Risk::Safe, false);
+        f.path = p.clone();
+        f.guards = vec!["chrome".into()];
+        let running: HashSet<String> = ["chrome".to_string()].into();
+        let out = execute(&[&f], home.path(), &running);
+        assert!(
+            out[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("started since the scan")
+        );
+        assert!(p.exists());
+    }
+
+    #[test]
+    fn execute_deletes_and_reports_freed_and_treats_missing_as_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let p = home.path().join(".cache/x");
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("f"), vec![1u8; 10_000]).unwrap();
+        let mut f = item(Risk::Safe, false);
+        f.path = p.clone();
+        let out = execute(&[&f], home.path(), &HashSet::new());
+        assert!(out[0].error.is_none());
+        assert!(out[0].freed >= 10_000);
+        assert!(!p.exists());
+        // second time: already gone, not a failure
+        assert!(
+            execute(&[&f], home.path(), &HashSet::new())[0]
+                .error
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn command_that_frees_nothing_warns_and_failing_command_errors() {
+        let home = tempfile::tempdir().unwrap();
+        let p = home.path().join(".cache/x");
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(p.join("f"), b"x").unwrap();
+        let mut f = item(Risk::Safe, false);
+        f.path = p.clone();
+        f.via_command = Some(vec!["true".into()]);
+        let out = execute(&[&f], home.path(), &HashSet::new());
+        assert!(out[0].error.is_none() && out[0].warning.is_some());
+        f.via_command = Some(vec!["false".into()]);
+        assert!(
+            execute(&[&f], home.path(), &HashSet::new())[0]
+                .error
+                .is_some()
+        );
+        f.via_command = Some(vec!["definitely-not-a-binary".into()]);
+        assert!(
+            execute(&[&f], home.path(), &HashSet::new())[0]
+                .error
+                .is_some()
+        );
+        assert!(p.exists());
     }
 }

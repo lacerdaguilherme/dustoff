@@ -8,7 +8,7 @@
 //! Orphan findings are always `review` risk: they hold settings and data.
 
 use crate::rules::Risk;
-use crate::safety::{expand, is_safe_target};
+use crate::safety::{expand, is_safe_target, is_safe_target_depth, trusted_path_dirs};
 use crate::scan::{Finding, path_size};
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -74,27 +74,36 @@ impl Installed {
             .map(|(_, orig, src)| format!("{orig} ({src})"))
     }
 
+    /// True when at least one package manager (deb, flatpak, snap) answered.
+    /// Without it, "not installed" verdicts are unreliable.
+    pub fn has_package_data(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|(_, _, s)| matches!(*s, "deb package" | "flatpak" | "snap"))
+    }
+
     pub fn detect(home: &Path) -> Installed {
         let mut inst = Installed::default();
-        for line in cmd_lines("dpkg-query", &["-W", "-f", "${Package}\n"]) {
+        for line in cmd_lines("/usr/bin/dpkg-query", &["-W", "-f", "${Package}\n"]) {
             inst.add(&line, "deb package");
         }
-        for line in cmd_lines("flatpak", &["list", "--app", "--columns=application"]) {
+        for line in cmd_lines(
+            "/usr/bin/flatpak",
+            &["list", "--app", "--columns=application"],
+        ) {
             inst.add(&line, "flatpak");
             if let Some(last) = line.rsplit('.').next() {
                 inst.add(last, "flatpak");
             }
         }
-        for line in cmd_lines("snap", &["list"]).into_iter().skip(1) {
+        for line in cmd_lines("/usr/bin/snap", &["list"]).into_iter().skip(1) {
             if let Some(name) = line.split_whitespace().next() {
                 inst.add(name, "snap");
             }
         }
-        if let Some(path) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path) {
-                for name in list_names(&dir) {
-                    inst.add(&name, "binary in PATH");
-                }
+        for dir in trusted_path_dirs() {
+            for name in list_names(&dir) {
+                inst.add(&name, "binary in PATH");
             }
         }
         for name in list_names(Path::new("/opt")) {
@@ -128,9 +137,15 @@ impl Installed {
     }
 }
 
+/// Run a fixed absolute-path command with a clean environment; empty when absent.
 fn cmd_lines(bin: &str, args: &[&str]) -> Vec<String> {
+    if !Path::new(bin).is_file() {
+        return Vec::new();
+    }
     Command::new(bin)
         .args(args)
+        .env_clear()
+        .env("LC_ALL", "C")
         .output()
         .ok()
         .filter(|o| o.status.success())
@@ -276,6 +291,8 @@ fn finding(app: &str, confidence: &str, path: PathBuf, note: String) -> Finding 
         regrows: "settings and data of an app that is not installed".into(),
         note,
         via_command: None,
+        also_paths: Vec::new(),
+        guards: Vec::new(),
     }
 }
 
@@ -302,7 +319,10 @@ pub fn scan_orphans(
         if evidence.is_some() {
             continue;
         }
-        for d in dirs.into_iter().filter(|d| is_safe_target(d, home)) {
+        for d in dirs
+            .into_iter()
+            .filter(|d| is_safe_target_depth(d, home, 1))
+        {
             out.push(finding(
                 &app.name,
                 "high",
