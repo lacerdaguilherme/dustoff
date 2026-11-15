@@ -1,0 +1,161 @@
+# Known applications: where they keep config/data, and what name proves they
+# are installed (package, binary, /opt dir, Flatpak/Snap id or AppImage name).
+# Matching ignores case and punctuation: "Google-Chrome" == "googlechrome".
+# If none of `names` is found installed, the `dirs` are reported as orphaned
+# with HIGH confidence. Dirs must start with "~/" and sit >= 2 levels deep.
+
+[[app]]
+id = "chrome"
+name = "Google Chrome"
+dirs = ["~/.config/google-chrome", "~/.cache/google-chrome"]
+names = ["google-chrome", "google-chrome-stable", "chrome"]
+
+[[app]]
+id = "edge"
+name = "Microsoft Edge"
+dirs = ["~/.config/microsoft-edge", "~/.cache/microsoft-edge"]
+names = ["microsoft-edge", "microsoft-edge-stable", "msedge"]
+
+[[app]]
+id = "firefox"
+name = "Firefox"
+dirs = ["~/.mozilla/firefox", "~/.cache/mozilla/firefox"]
+names = ["firefox"]
+
+[[app]]
+id = "vscode"
+name = "Visual Studio Code"
+dirs = ["~/.config/Code", "~/.vscode"]
+names = ["code", "vscode", "visual-studio-code"]
+
+[[app]]
+id = "cursor"
+name = "Cursor"
+dirs = ["~/.config/Cursor", "~/.cursor"]
+names = ["cursor"]
+
+[[app]]
+id = "slack"
+name = "Slack"
+dirs = ["~/.config/Slack"]
+names = ["slack", "slack-desktop"]
+
+[[app]]
+id = "discord"
+name = "Discord"
+dirs = ["~/.config/discord"]
+names = ["discord"]
+
+[[app]]
+id = "zoom"
+name = "Zoom"
+dirs = ["~/.zoom"]
+names = ["zoom"]
+
+[[app]]
+id = "obsidian"
+name = "Obsidian"
+dirs = ["~/.config/obsidian"]
+names = ["obsidian"]
+
+[[app]]
+id = "spotify"
+name = "Spotify"
+dirs = ["~/.config/spotify", "~/.cache/spotify"]
+names = ["spotify", "spotify-client"]
+
+[[app]]
+id = "dbeaver"
+name = "DBeaver"
+dirs = ["~/.local/share/DBeaverData"]
+names = ["dbeaver", "dbeaver-ce"]
+
+[[app]]
+id = "chaterm"
+name = "Chaterm"
+dirs = ["~/.config/Chaterm"]
+names = ["chaterm"]
+
+[[app]]
+id = "redisinsight"
+name = "RedisInsight"
+dirs = ["~/.config/RedisInsight", "~/.redisinsight-app"]
+names = ["redisinsight"]
+
+[[app]]
+id = "capacities"
+name = "Capacities"
+dirs = ["~/.config/Capacities"]
+names = ["capacities"]
+
+[[app]]
+id = "normcap"
+name = "NormCap"
+dirs = ["~/.config/normcap", "~/.local/share/normcap"]
+names = ["normcap"]
+
+[[app]]
+id = "jamovi"
+name = "jamovi"
+dirs = ["~/.var/app/org.jamovi.jamovi", "~/.config/jamovi"]
+names = ["jamovi", "org.jamovi.jamovi"]
+
+[[app]]
+id = "termius"
+name = "Termius"
+dirs = ["~/.config/Termius"]
+names = ["termius"]
+
+[[app]]
+id = "lens"
+name = "Lens"
+dirs = ["~/.config/Lens", "~/.k8slens"]
+names = ["lens", "lens-desktop"]
+
+[[app]]
+id = "simplenote"
+name = "Simplenote"
+dirs = ["~/.config/Simplenote"]
+names = ["simplenote"]
+
+[[app]]
+id = "anydesk"
+name = "AnyDesk"
+dirs = ["~/.anydesk"]
+names = ["anydesk"]
+
+[[app]]
+id = "sublime-text"
+name = "Sublime Text"
+dirs = ["~/.config/sublime-text"]
+names = ["sublime-text", "subl"]
+
+[[app]]
+id = "wine"
+name = "Wine"
+dirs = ["~/.wine", "~/.local/share/wineprefixes"]
+names = ["wine", "wine-stable", "winehq-stable", "wine64"]
+
+[[app]]
+id = "calibre"
+name = "calibre"
+dirs = ["~/.config/calibre"]
+names = ["calibre"]
+
+[[app]]
+id = "telegram"
+name = "Telegram Desktop"
+dirs = ["~/.local/share/TelegramDesktop"]
+names = ["telegram", "telegram-desktop"]
+
+[[app]]
+id = "signal"
+name = "Signal Desktop"
+dirs = ["~/.config/Signal"]
+names = ["signal", "signal-desktop"]
+
+[[app]]
+id = "steam"
+name = "Steam"
+dirs = ["~/.steam", "~/.local/share/Steam"]
+names = ["steam", "steam-launcher"]

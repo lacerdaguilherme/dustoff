@@ -1,0 +1,203 @@
+# Built-in rules. Every path must start with "~/" and point to something
+# inside the home directory that the owning tool recreates on demand.
+# Rules are original work (paths verified against each tool's docs), see
+# docs/writing-rules.md to add or override one.
+#
+# risk = "safe"   -> regenerated automatically, only costs time/bandwidth.
+# risk = "review" -> may hold something you care about; never selected by "all".
+
+[[rule]]
+id = "uv-cache"
+name = "uv cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.cache/uv"]
+regrows = "Next `uv run`/`uv pip install` downloads wheels again."
+skip_if_running = ["uv", "uvx"]
+clean_command = ["uv", "cache", "clean"]
+
+[[rule]]
+id = "pip-cache"
+name = "pip cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.cache/pip"]
+regrows = "Next `pip install` downloads wheels again."
+clean_command = ["pip", "cache", "purge"]
+
+[[rule]]
+id = "npm-cache"
+name = "npm cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.npm/_cacache"]
+regrows = "Next `npm install` re-fetches packages."
+skip_if_running = ["npm"]
+clean_command = ["npm", "cache", "clean", "--force"]
+
+[[rule]]
+id = "yarn-cache"
+name = "Yarn cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.cache/yarn"]
+regrows = "Next `yarn install` re-fetches packages."
+clean_command = ["yarn", "cache", "clean"]
+
+[[rule]]
+id = "pnpm-store"
+name = "pnpm content-addressable store"
+category = "dev-cache"
+risk = "review"
+paths = ["~/.local/share/pnpm/store"]
+description = "Prefer `pnpm store prune`; deleting it forces every project to re-download."
+regrows = "Next `pnpm install` re-fetches packages."
+clean_command = ["pnpm", "store", "prune"]
+
+[[rule]]
+id = "gradle-caches"
+name = "Gradle caches"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.gradle/caches"]
+regrows = "Next Gradle build re-downloads dependencies (slow)."
+skip_if_running = ["java"]
+
+[[rule]]
+id = "go-build-cache"
+name = "Go build cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.cache/go-build"]
+regrows = "Next `go build` recompiles."
+clean_command = ["go", "clean", "-cache"]
+
+[[rule]]
+id = "go-mod-cache"
+name = "Go module cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/go/pkg/mod"]
+description = "Files are read-only on purpose; dustoff fixes permissions before deleting."
+regrows = "Next `go build` re-downloads modules."
+clean_command = ["go", "clean", "-modcache"]
+
+[[rule]]
+id = "cargo-registry"
+name = "Cargo registry downloads"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.cargo/registry/cache", "~/.cargo/registry/src"]
+regrows = "Next `cargo build` re-downloads crates."
+skip_if_running = ["cargo", "rustc"]
+
+[[rule]]
+id = "terraform-plugin-cache"
+name = "Terraform plugin cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.terraform.d/plugin-cache"]
+regrows = "Next `terraform init` re-downloads providers."
+skip_if_running = ["terraform"]
+
+[[rule]]
+id = "trivy-cache"
+name = "Trivy vulnerability DB"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.cache/trivy"]
+regrows = "Next scan downloads the DB again."
+clean_command = ["trivy", "clean", "--all"]
+
+[[rule]]
+id = "conda-pkgs"
+name = "conda package cache"
+category = "dev-cache"
+risk = "safe"
+paths = ["~/.conda/pkgs", "~/miniconda3/pkgs", "~/anaconda3/pkgs"]
+regrows = "Next `conda install` re-downloads packages."
+clean_command = ["conda", "clean", "--all", "--yes"]
+
+[[rule]]
+id = "huggingface-cache"
+name = "Hugging Face model cache"
+category = "ml"
+risk = "review"
+paths = ["~/.cache/huggingface"]
+description = "Models can be many GB and slow to fetch again."
+regrows = "Models download again on first use."
+
+[[rule]]
+id = "thumbnails"
+name = "Thumbnail cache"
+category = "desktop"
+risk = "safe"
+paths = ["~/.cache/thumbnails"]
+regrows = "Regenerated when you browse folders."
+
+[[rule]]
+id = "trash"
+name = "Trash (XDG)"
+category = "desktop"
+risk = "review"
+paths = ["~/.local/share/Trash/files", "~/.local/share/Trash/info"]
+description = "Your own deleted files. Check before emptying."
+
+[[rule]]
+id = "chrome-cache"
+name = "Google Chrome cache"
+category = "browser"
+risk = "safe"
+paths = [
+  "~/.cache/google-chrome",
+  "~/.config/google-chrome/*/Cache",
+  "~/.config/google-chrome/*/Code Cache",
+  "~/.config/google-chrome/*/GPUCache",
+]
+regrows = "Pages load slower once, then it refills."
+skip_if_running = ["chrome"]
+
+[[rule]]
+id = "chrome-on-device-model"
+name = "Chrome on-device AI model"
+category = "browser"
+risk = "safe"
+paths = ["~/.config/google-chrome/OptGuideOnDeviceModel"]
+regrows = "Chrome downloads it again when a feature needs it."
+skip_if_running = ["chrome"]
+
+[[rule]]
+id = "edge-cache"
+name = "Microsoft Edge cache"
+category = "browser"
+risk = "safe"
+paths = [
+  "~/.cache/microsoft-edge",
+  "~/.config/microsoft-edge/*/Cache",
+  "~/.config/microsoft-edge/*/Code Cache",
+  "~/.config/microsoft-edge/*/GPUCache",
+]
+regrows = "Pages load slower once, then it refills."
+skip_if_running = ["msedge"]
+
+[[rule]]
+id = "firefox-cache"
+name = "Firefox cache"
+category = "browser"
+risk = "safe"
+paths = ["~/.cache/mozilla/firefox"]
+regrows = "Pages load slower once, then it refills."
+skip_if_running = ["firefox", "firefox-bin"]
+
+[[rule]]
+id = "vscode-cache"
+name = "VS Code cache"
+category = "editor"
+risk = "safe"
+paths = [
+  "~/.config/Code/Cache",
+  "~/.config/Code/CachedData",
+  "~/.config/Code/CachedExtensionVSIXs",
+]
+regrows = "Rebuilt on next launch."
+skip_if_running = ["code"]

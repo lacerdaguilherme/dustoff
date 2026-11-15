@@ -1,0 +1,28 @@
+[package]
+name = "dustoff"
+version = "0.1.0"
+edition = "2024"
+description = "Find and safely remove caches, build artifacts and other disk-space hogs. Shows everything first, dry-run built in, always asks before deleting."
+license = "MIT"
+repository = "https://github.com/lacerdaguilherme/dustoff"
+readme = "README.md"
+keywords = ["cleanup", "disk-space", "cache", "cli", "dry-run"]
+categories = ["command-line-utilities", "filesystem"]
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "7.0.0"
+glob = "0.3.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.1"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
