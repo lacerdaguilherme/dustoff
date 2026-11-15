@@ -1,7 +1,7 @@
 //! Turn rules into concrete findings (path + size), read-only.
 
 use crate::rules::{Risk, Rule};
-use crate::safety::{expand, is_safe_target};
+use crate::safety::{expand, is_safe_target, which};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,7 @@ pub struct Finding {
     pub name: String,
     pub category: String,
     pub risk: Risk,
+    #[serde(serialize_with = "ser_path")]
     pub path: PathBuf,
     pub bytes: u64,
     /// Days since last modification (project artifacts only).
@@ -24,26 +25,72 @@ pub struct Finding {
     pub note: String,
     /// Tool command that will be run instead of deleting the path.
     pub via_command: Option<Vec<String>>,
+    /// Other paths of the same rule that `via_command` cleans in the same run.
+    #[serde(serialize_with = "ser_paths")]
+    pub also_paths: Vec<PathBuf>,
+    /// Process names that must not be running when this item is removed.
+    pub guards: Vec<String>,
 }
 
-/// Locate `bin` on PATH.
-pub fn which(bin: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|d| d.join(bin))
-        .find(|p| p.is_file())
+fn ser_path<S: serde::Serializer>(p: &Path, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&p.to_string_lossy())
 }
 
-/// Total size of a path without following symlinks. Unreadable entries count as 0.
+fn ser_paths<S: serde::Serializer>(ps: &[PathBuf], s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(ps.iter().map(|p| p.to_string_lossy()))
+}
+
+/// Disk usage of a path in bytes (allocated blocks on Unix, hard links counted
+/// once), without following symlinks. Unreadable entries count as 0.
 pub fn path_size(p: &Path) -> u64 {
-    WalkDir::new(p)
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    let mut total = 0;
+    for e in WalkDir::new(p)
         .follow_links(false)
+        .follow_root_links(false)
         .into_iter()
         .filter_map(Result::ok)
-        .filter_map(|e| e.metadata().ok())
-        .filter(|m| m.is_file())
-        .map(|m| m.len())
-        .sum()
+    {
+        let Ok(m) = e.metadata() else { continue };
+        if !m.is_file() {
+            continue;
+        }
+        total += allocated(&m, &mut seen);
+    }
+    total
+}
+
+#[cfg(unix)]
+fn allocated(m: &std::fs::Metadata, seen: &mut HashSet<(u64, u64)>) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    if m.nlink() > 1 && !seen.insert((m.dev(), m.ino())) {
+        return 0;
+    }
+    m.blocks() * 512
+}
+
+#[cfg(not(unix))]
+fn allocated(m: &std::fs::Metadata, _: &mut HashSet<(u64, u64)>) -> u64 {
+    m.len()
+}
+
+/// Drop findings nested inside (or equal to) another finding's path, so sizes
+/// are not counted twice and nothing is deleted twice. The outer one wins.
+pub fn dedupe_overlaps(mut items: Vec<Finding>) -> Vec<Finding> {
+    items.sort_by_key(|f| f.path.components().count());
+    let mut kept: Vec<Finding> = Vec::new();
+    for f in items {
+        let covered = kept.iter().any(|k| {
+            std::iter::once(&k.path)
+                .chain(k.also_paths.iter())
+                .any(|kp| f.path.starts_with(kp))
+        });
+        if !covered {
+            kept.push(f);
+        }
+    }
+    kept.sort_by_key(|a| std::cmp::Reverse(a.bytes));
+    kept
 }
 
 /// Names of running processes (Linux: `/proc/<pid>/comm`). Empty elsewhere.
@@ -59,6 +106,11 @@ pub fn running_processes() -> HashSet<String> {
     set
 }
 
+/// `/proc/<pid>/comm` is truncated to 15 bytes; compare the same way.
+pub fn comm_name(n: &str) -> String {
+    n.chars().take(15).collect()
+}
+
 pub fn scan_rules(rules: &[Rule], home: &Path, running: &HashSet<String>) -> Vec<Finding> {
     let mut out = Vec::new();
     for rule in rules {
@@ -67,31 +119,46 @@ pub fn scan_rules(rules: &[Rule], home: &Path, running: &HashSet<String>) -> Vec
         let blocker = rule
             .skip_if_running
             .iter()
-            .find(|n| running.contains(*n))
+            .find(|n| running.contains(&comm_name(n)))
             .cloned();
+        let mut hits: Vec<(PathBuf, u64)> = Vec::new();
         for pat in &rule.paths {
             for path in expand(pat, home) {
                 if !is_safe_target(&path, home) {
                     continue;
                 }
                 let bytes = path_size(&path);
-                if bytes == 0 {
-                    continue;
+                if bytes > 0 {
+                    hits.push((path, bytes));
                 }
-                out.push(Finding {
-                    rule_id: rule.id.clone(),
-                    name: rule.name.clone(),
-                    category: rule.category.clone(),
-                    risk: rule.risk,
-                    path,
-                    bytes,
-                    age_days: None,
-                    blocked_by: blocker.as_ref().map(|b| format!("'{b}' is running")),
-                    regrows: rule.regrows.clone(),
-                    note: rule.description.clone(),
-                    via_command: via.clone(),
-                });
             }
+        }
+        // A tool command cleans everything the tool owns in one run, so it
+        // is shown (and selected) as a single item covering all its paths.
+        let groups: Vec<Vec<(PathBuf, u64)>> = if via.is_some() && !hits.is_empty() {
+            vec![hits]
+        } else {
+            hits.into_iter().map(|h| vec![h]).collect()
+        };
+        for group in groups {
+            let bytes = group.iter().map(|(_, b)| b).sum();
+            let mut paths = group.into_iter().map(|(p, _)| p);
+            let path = paths.next().expect("group is never empty");
+            out.push(Finding {
+                rule_id: rule.id.clone(),
+                name: rule.name.clone(),
+                category: rule.category.clone(),
+                risk: rule.risk,
+                path,
+                bytes,
+                age_days: None,
+                blocked_by: blocker.as_ref().map(|b| format!("'{b}' is running")),
+                regrows: rule.regrows.clone(),
+                note: rule.description.clone(),
+                via_command: via.clone(),
+                also_paths: paths.collect(),
+                guards: rule.skip_if_running.clone(),
+            });
         }
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.bytes));
@@ -124,7 +191,7 @@ mod tests {
         std::fs::write(home.join(".cache/t/a"), vec![0u8; 1000]).unwrap();
         let f = scan_rules(&[rule(&[])], home, &HashSet::new());
         assert_eq!(f.len(), 1);
-        assert_eq!(f[0].bytes, 1000);
+        assert!(f[0].bytes >= 1000);
 
         std::fs::remove_file(home.join(".cache/t/a")).unwrap();
         assert!(scan_rules(&[rule(&[])], home, &HashSet::new()).is_empty());
@@ -139,5 +206,75 @@ mod tests {
         let running: HashSet<String> = ["chrome".to_string()].into();
         let f = scan_rules(&[rule(&["chrome"])], home, &running);
         assert_eq!(f[0].blocked_by.as_deref(), Some("'chrome' is running"));
+    }
+
+    fn finding_at(path: PathBuf, bytes: u64) -> Finding {
+        Finding {
+            rule_id: "r".into(),
+            name: "n".into(),
+            category: "c".into(),
+            risk: Risk::Safe,
+            path,
+            bytes,
+            age_days: None,
+            blocked_by: None,
+            regrows: String::new(),
+            note: String::new(),
+            via_command: None,
+            also_paths: Vec::new(),
+            guards: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn overlapping_findings_are_counted_once_outer_wins() {
+        let items = vec![
+            finding_at("/h/.cargo/registry/src/x/target".into(), 5),
+            finding_at("/h/.cargo/registry/src".into(), 10),
+            finding_at("/h/.cache/a".into(), 7),
+            finding_at("/h/.cache/a".into(), 7),
+        ];
+        let kept = dedupe_overlaps(items);
+        let paths: Vec<_> = kept.iter().map(|f| f.path.to_str().unwrap()).collect();
+        assert_eq!(paths, vec!["/h/.cargo/registry/src", "/h/.cache/a"]);
+    }
+
+    #[test]
+    fn command_rules_become_one_item_covering_all_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        for p in [".cache/t", ".cache/u"] {
+            std::fs::create_dir_all(home.join(p)).unwrap();
+            std::fs::write(home.join(p).join("f"), b"x").unwrap();
+        }
+        let mut r = rule(&[]);
+        r.paths = vec!["~/.cache/t".into(), "~/.cache/u".into()];
+        r.clean_command = vec!["true".into()];
+        let f = scan_rules(&[r], home, &HashSet::new());
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].also_paths.len(), 1);
+        assert!(f[0].via_command.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_rule_path_is_not_sized_through_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("big"), vec![0u8; 100_000]).unwrap();
+        std::fs::create_dir_all(dir.path().join(".cache")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join(".cache/t")).unwrap();
+        assert_eq!(path_size(&dir.path().join(".cache/t")), 0);
+        assert!(scan_rules(&[rule(&[])], dir.path(), &HashSet::new()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hard_links_are_counted_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a"), vec![0u8; 50_000]).unwrap();
+        std::fs::hard_link(dir.path().join("a"), dir.path().join("b")).unwrap();
+        let one = path_size(&dir.path().join("a"));
+        assert_eq!(path_size(dir.path()), one);
     }
 }

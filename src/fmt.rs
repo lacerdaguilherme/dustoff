@@ -1,13 +1,15 @@
 //! Human-readable output.
 
 use crate::rules::Risk;
+use crate::safety::{clean_text, show_path};
 use crate::scan::Finding;
 
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut v = bytes as f64;
     let mut i = 0;
-    while v >= 1024.0 && i < UNITS.len() - 1 {
+    // 1023.95 so that one-decimal rounding never prints "1024.0 KiB"
+    while v >= 1023.95 && i < UNITS.len() - 1 {
         v /= 1024.0;
         i += 1;
     }
@@ -21,7 +23,7 @@ pub fn human_size(bytes: u64) -> String {
 /// What dustoff will do for this finding if it is selected.
 pub fn action(f: &Finding) -> String {
     match &f.via_command {
-        Some(cmd) => format!("run `{}`", cmd.join(" ")),
+        Some(cmd) => clean_text(&format!("run `{}`", cmd.join(" "))),
         None => "delete".to_string(),
     }
 }
@@ -36,7 +38,7 @@ pub fn print_table(findings: &[Finding]) {
             Risk::Safe => "safe",
             Risk::Review => "review",
         };
-        let mut what = f.name.clone();
+        let mut what = clean_text(&f.name);
         if what.chars().count() > 44 {
             what = what.chars().take(43).collect::<String>() + "…";
         }
@@ -47,10 +49,17 @@ pub fn print_table(findings: &[Finding]) {
             risk,
             what,
             action(f),
-            f.path.display()
+            show_path(&f.path)
         );
         if let Some(b) = &f.blocked_by {
-            println!("{:>3}  {:>10}  {:<6}  {:<44}  SKIPPED: {b}", "", "", "", "");
+            println!(
+                "{:>3}  {:>10}  {:<6}  {:<44}  SKIPPED: {}",
+                "",
+                "",
+                "",
+                "",
+                clean_text(b)
+            );
         }
         if let Some(a) = f.age_days {
             println!(
@@ -61,7 +70,11 @@ pub fn print_table(findings: &[Finding]) {
         if !f.note.is_empty() {
             println!(
                 "{:>3}  {:>10}  {:<6}  {:<44}  note: {}",
-                "", "", "", "", f.note
+                "",
+                "",
+                "",
+                "",
+                clean_text(&f.note)
             );
         }
     }

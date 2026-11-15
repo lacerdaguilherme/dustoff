@@ -4,6 +4,50 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Commands that can execute arbitrary things; never allowed as `clean_command`.
+const COMMAND_DENYLIST: &[&str] = &[
+    "sh",
+    "bash",
+    "zsh",
+    "dash",
+    "fish",
+    "ksh",
+    "csh",
+    "tcsh",
+    "env",
+    "python",
+    "python3",
+    "perl",
+    "ruby",
+    "node",
+    "nodejs",
+    "php",
+    "lua",
+    "awk",
+    "gawk",
+    "xargs",
+    "sudo",
+    "doas",
+    "su",
+    "rm",
+    "mv",
+    "dd",
+    "find",
+    "eval",
+    "exec",
+    "nohup",
+    "busybox",
+    "curl",
+    "wget",
+    "ssh",
+    "scp",
+    "nc",
+    "ncat",
+    "git",
+    "make",
+    "cargo-run",
+];
+
 const BUILTIN: &str = include_str!("../rules/default.toml");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +60,7 @@ pub enum Risk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,
     pub name: String,
@@ -60,11 +105,25 @@ fn validate(r: &Rule) -> Result<()> {
         bail!("no paths");
     }
     for p in &r.paths {
-        if !p.starts_with("~/") {
+        let Some(rest) = p.strip_prefix("~/") else {
             bail!("path '{p}' must start with ~/");
-        }
-        if p.split('/').any(|c| c == "..") {
+        };
+        let parts: Vec<&str> = rest.split('/').filter(|c| !c.is_empty()).collect();
+        if parts.contains(&"..") {
             bail!("path '{p}' must not contain '..'");
+        }
+        if parts.len() < 2 || parts[0].contains(['*', '?', '[']) {
+            bail!("path '{p}' must be at least two levels deep with a literal first component");
+        }
+    }
+    if let Some(bin) = r.clean_command.first() {
+        if bin.is_empty() || bin.contains('/') {
+            bail!("clean_command must be a bare command name, got '{bin}'");
+        }
+        if COMMAND_DENYLIST.contains(&bin.as_str()) {
+            bail!(
+                "clean_command '{bin}' is not allowed (shells, interpreters and generic tools can run anything)"
+            );
         }
     }
     Ok(())
@@ -74,8 +133,10 @@ pub fn builtin() -> Result<Vec<Rule>> {
     parse(BUILTIN, "built-in rules")
 }
 
-/// Built-in rules plus every `*.toml` in `user_dir`; a user rule with the
-/// same id replaces the built-in one.
+/// Built-in rules plus every `*.toml` in `user_dir`. A user rule with the
+/// same id replaces the built-in one. User rules are untrusted input: they are
+/// always `review` (never picked by "all") and labelled `[user rule]`; a file
+/// that fails validation is skipped with a warning instead of aborting.
 pub fn load(user_dir: Option<&Path>) -> Result<Vec<Rule>> {
     let mut rules = builtin()?;
     let Some(dir) = user_dir.filter(|d| d.is_dir()) else {
@@ -87,10 +148,19 @@ pub fn load(user_dir: Option<&Path>) -> Result<Vec<Rule>> {
         .collect();
     files.sort();
     for f in files {
-        let text = std::fs::read_to_string(&f)?;
-        for r in parse(&text, &f.display().to_string())? {
-            rules.retain(|x| x.id != r.id);
-            rules.push(r);
+        let parsed = std::fs::read_to_string(&f)
+            .map_err(anyhow::Error::from)
+            .and_then(|text| parse(&text, &f.display().to_string()));
+        match parsed {
+            Ok(user_rules) => {
+                for mut r in user_rules {
+                    r.risk = Risk::Review;
+                    r.name = format!("{} [user rule]", r.name);
+                    rules.retain(|x| x.id != r.id);
+                    rules.push(r);
+                }
+            }
+            Err(e) => eprintln!("warning: skipping {}: {e:#}", f.display()),
         }
     }
     Ok(rules)
@@ -143,6 +213,36 @@ mod tests {
         let rules = load(Some(dir.path())).unwrap();
         let t: Vec<_> = rules.iter().filter(|r| r.id == "thumbnails").collect();
         assert_eq!(t.len(), 1);
-        assert_eq!(t[0].name, "mine");
+        assert_eq!(t[0].name, "mine [user rule]");
+        assert_eq!(t[0].risk, Risk::Review);
+    }
+
+    fn one(extra: &str, paths: &str) -> String {
+        format!("[[rule]]\nid='x'\nname='x'\ncategory='c'\nrisk='safe'\npaths=[{paths}]\n{extra}")
+    }
+
+    #[test]
+    fn rejects_shallow_globby_unknown_keys_and_dangerous_commands() {
+        assert!(parse(&one("", "'~/.cache/x'"), "t").is_ok());
+        assert!(parse(&one("", "'~/*/*'"), "t").is_err());
+        assert!(parse(&one("", "'~/.cache'"), "t").is_err());
+        assert!(parse(&one("skip_if_runing=['a']", "'~/.cache/x'"), "t").is_err());
+        assert!(parse(&one("clean_command=['sh','-c','id']", "'~/.cache/x'"), "t").is_err());
+        assert!(parse(&one("clean_command=['/bin/true']", "'~/.cache/x'"), "t").is_err());
+        assert!(
+            parse(
+                &one("clean_command=['uv','cache','clean']", "'~/.cache/x'"),
+                "t"
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn bad_user_file_is_skipped_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("bad.toml"), "not toml [[").unwrap();
+        let rules = load(Some(dir.path())).unwrap();
+        assert_eq!(rules.len(), builtin().unwrap().len());
     }
 }

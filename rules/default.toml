@@ -95,8 +95,9 @@ skip_if_running = ["cargo", "rustc"]
 id = "terraform-plugin-cache"
 name = "Terraform plugin cache"
 category = "dev-cache"
-risk = "safe"
+risk = "review"
 paths = ["~/.terraform.d/plugin-cache"]
+description = "Initialised workspaces may link into it; they need `terraform init` again."
 regrows = "Next `terraform init` re-downloads providers."
 skip_if_running = ["terraform"]
 
@@ -123,8 +124,8 @@ id = "huggingface-cache"
 name = "Hugging Face model cache"
 category = "ml"
 risk = "review"
-paths = ["~/.cache/huggingface"]
-description = "Models can be many GB and slow to fetch again."
+paths = ["~/.cache/huggingface/hub"]
+description = "Downloaded models, can be many GB and slow to fetch again. Your login token is kept."
 regrows = "Models download again on first use."
 
 [[rule]]

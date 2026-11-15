@@ -93,10 +93,21 @@ fn marker_present(parent: &Path, m: &Marker) -> bool {
     }
 }
 
-fn age_days(p: &Path) -> Option<u64> {
-    let m = p.metadata().ok()?.modified().ok()?;
+/// Days since the project was last touched: newest mtime among the project
+/// directory and its direct entries other than the artifact itself (an
+/// incremental build does not change the artifact directory's own mtime).
+fn project_age_days(project: &Path, artifact: &Path) -> Option<u64> {
+    let mut newest = project.metadata().ok()?.modified().ok()?;
+    for e in std::fs::read_dir(project).ok()?.filter_map(Result::ok) {
+        if e.path() == artifact {
+            continue;
+        }
+        if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+            newest = newest.max(m);
+        }
+    }
     SystemTime::now()
-        .duration_since(m)
+        .duration_since(newest)
         .ok()
         .map(|d| d.as_secs() / 86_400)
 }
@@ -129,8 +140,9 @@ pub fn scan_projects(root: &Path, home: &Path, older_than_days: Option<u64>) -> 
         if !is_safe_target(e.path(), home) {
             continue;
         }
-        let age = age_days(e.path());
-        if older_than_days.is_some_and(|min| age.is_some_and(|a| a < min)) {
+        let age = project_age_days(parent, e.path());
+        // unknown age never passes an explicit --older-than filter
+        if older_than_days.is_some_and(|min| age.is_none_or(|a| a < min)) {
             continue;
         }
         let bytes = path_size(e.path());
@@ -156,6 +168,8 @@ pub fn scan_projects(root: &Path, home: &Path, older_than_days: Option<u64>) -> 
             regrows: kind.regrows.into(),
             note: String::new(),
             via_command: None,
+            also_paths: Vec::new(),
+            guards: Vec::new(),
         });
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.bytes));
@@ -189,7 +203,7 @@ mod tests {
         assert_eq!(found.len(), 2, "{ids:?}");
         assert!(ids.contains(&"project:node_modules"));
         assert!(ids.contains(&"project:.terraform"));
-        assert_eq!(found[0].bytes, 800);
+        assert!(found[0].bytes >= 800);
     }
 
     #[test]
