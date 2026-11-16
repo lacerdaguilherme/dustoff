@@ -5,6 +5,7 @@
 pub mod clean;
 pub mod fmt;
 pub mod orphans;
+pub mod pkgmgr;
 pub mod projects;
 pub mod rules;
 pub mod safety;

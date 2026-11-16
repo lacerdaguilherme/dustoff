@@ -293,6 +293,7 @@ fn finding(app: &str, confidence: &str, path: PathBuf, note: String) -> Finding 
         via_command: None,
         also_paths: Vec::new(),
         guards: Vec::new(),
+        privileged: Vec::new(),
     }
 }
 

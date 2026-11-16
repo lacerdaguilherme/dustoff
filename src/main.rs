@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use dustoff::clean::{execute, parse_selection};
-use dustoff::fmt::{action, human_size, print_table};
+use dustoff::fmt::{action, command_line, human_size, print_table};
 use dustoff::safety::{self, clean_text, show_path};
 use dustoff::scan::{Finding, dedupe_overlaps, running_processes, scan_rules};
-use dustoff::{orphans, projects, rules};
+use dustoff::{orphans, pkgmgr, projects, rules};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 
@@ -32,6 +32,10 @@ struct Select {
     /// With --orphans: skip unknown-owner dirs modified within the last DAYS days (assumed in use).
     #[arg(long, default_value_t = 30, value_name = "DAYS")]
     orphan_min_age: u64,
+    /// Also look at Flatpak and Snap leftovers (unused runtimes, old revisions).
+    /// Anything needing root is printed for you to run; dustoff never uses sudo.
+    #[arg(long)]
+    packages: bool,
     /// Hide anything smaller than this many MiB.
     #[arg(long, default_value_t = 1, value_name = "MIB")]
     min_size: u64,
@@ -86,6 +90,10 @@ fn gather(sel: &Select) -> Result<Vec<Finding>> {
             .canonicalize()
             .with_context(|| format!("--projects {}: not a readable directory", root.display()))?;
         all.extend(projects::scan_projects(&root, &home, sel.older_than));
+    }
+    if sel.packages {
+        all.extend(pkgmgr::scan_flatpak(&home));
+        all.extend(pkgmgr::scan_snap());
     }
     if sel.orphans {
         let apps = orphans::known_apps()?;
@@ -226,6 +234,13 @@ fn cmd_clean(sel: Select, dry_run: bool) -> Result<()> {
         }
     }
     println!("\nFreed {}. {failed} failure(s).", human_size(freed));
+    let root_cmds: Vec<&Vec<String>> = selected.iter().flat_map(|f| f.privileged.iter()).collect();
+    if !root_cmds.is_empty() {
+        println!("\nThese need root. dustoff never runs sudo; run them yourself:");
+        for c in root_cmds {
+            println!("  {}", command_line(c));
+        }
+    }
     if failed > 0 && used_command {
         println!(
             "Tip: re-run with --no-commands to delete files directly instead of using the app's own command."

@@ -22,6 +22,9 @@ pub fn human_size(bytes: u64) -> String {
 
 /// What dustoff will do for this finding if it is selected.
 pub fn action(f: &Finding) -> String {
+    if !f.privileged.is_empty() {
+        return "needs root: prints the commands for you to run".to_string();
+    }
     match &f.via_command {
         Some(cmd) => clean_text(&format!("run `{}`", cmd.join(" "))),
         None => "delete".to_string(),
@@ -80,9 +83,40 @@ pub fn print_table(findings: &[Finding]) {
     }
 }
 
+/// Quote one argument for copy-paste into a POSIX shell.
+pub fn shell_quote(arg: &str) -> String {
+    let plain = !arg.is_empty()
+        && arg
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:@%+,".contains(c));
+    if plain {
+        arg.to_string()
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
+}
+
+pub fn command_line(argv: &[String]) -> String {
+    clean_text(
+        &argv
+            .iter()
+            .map(|a| shell_quote(a))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quotes_shell_arguments() {
+        assert_eq!(shell_quote("--revision=3580"), "--revision=3580");
+        assert_eq!(shell_quote("a b"), "'a b'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(shell_quote(""), "''");
+    }
 
     #[test]
     fn sizes() {

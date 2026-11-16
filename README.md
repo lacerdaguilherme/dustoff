@@ -46,6 +46,7 @@ $ dustoff scan --orphans --projects ~/code
 | --- | --- | --- |
 | Cache rules | always | uv, pip, npm, pnpm, yarn, Go, Cargo, Gradle, Terraform, conda, browsers, VS Code, thumbnails, trash |
 | Build artifacts | `--projects PATH` | `node_modules`, `target`, `.terraform`, `.venv`, `__pycache__` (only next to the file that proves it is a project) |
+| Flatpak and Snap leftovers | `--packages` | unused Flatpak runtimes/extensions (previewed without removing anything), old disabled Snap revisions, Flatpak app caches. Anything that needs root is **printed for you to run**; dustoff never calls `sudo` |
 | Orphaned app data | `--orphans` | config/data/cache dirs of apps that are no longer installed, checked against deb, Flatpak, Snap, `PATH`, `/opt`, AppImages and `.desktop` files |
 
 Orphan hits come with a confidence: **high** for apps in
@@ -61,7 +62,7 @@ dustoff scan                       # what is there
 dustoff scan --json                # same, machine readable
 dustoff clean --dry-run            # plan only
 dustoff clean                      # plan, pick, confirm, delete
-dustoff clean --projects ~/code --older-than 60 --orphans
+dustoff clean --projects ~/code --older-than 60 --orphans --packages
 dustoff rules                      # list active rules
 ```
 
