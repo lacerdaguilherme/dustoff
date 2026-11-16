@@ -77,6 +77,20 @@ fn allocated(m: &std::fs::Metadata, _: &mut HashSet<(u64, u64)>) -> u64 {
     m.len()
 }
 
+/// Apply `--no-commands`: items cleaned by a tool command fall back to direct
+/// deletion, except package-manager items (`~/.local/share/flatpak` holds
+/// installed apps, never to be deleted as a path), which are dropped instead.
+pub fn apply_no_commands(items: Vec<Finding>) -> Vec<Finding> {
+    items
+        .into_iter()
+        .filter(|f| !(f.category == "package-manager" && f.via_command.is_some()))
+        .map(|mut f| {
+            f.via_command = None;
+            f
+        })
+        .collect()
+}
+
 /// Drop findings nested inside (or equal to) another finding's path, so sizes
 /// are not counted twice and nothing is deleted twice. The outer one wins.
 pub fn dedupe_overlaps(mut items: Vec<Finding>) -> Vec<Finding> {
@@ -281,5 +295,18 @@ mod tests {
         std::fs::hard_link(dir.path().join("a"), dir.path().join("b")).unwrap();
         let one = path_size(&dir.path().join("a"));
         assert_eq!(path_size(dir.path()), one);
+    }
+
+    #[test]
+    fn no_commands_drops_package_manager_items_and_keeps_rule_items_as_deletes() {
+        let mut flatpak = finding_at("/h/.local/share/flatpak".into(), 9);
+        flatpak.category = "package-manager".into();
+        flatpak.via_command = Some(vec!["flatpak".into()]);
+        let mut cache = finding_at("/h/.cache/uv".into(), 5);
+        cache.via_command = Some(vec!["uv".into()]);
+        let kept = apply_no_commands(vec![flatpak, cache]);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].path.to_str().unwrap(), "/h/.cache/uv");
+        assert!(kept[0].via_command.is_none());
     }
 }

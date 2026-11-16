@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand};
 use dustoff::clean::{execute, parse_selection};
 use dustoff::fmt::{action, command_line, human_size, print_table};
 use dustoff::safety::{self, clean_text, show_path};
-use dustoff::scan::{Finding, dedupe_overlaps, running_processes, scan_rules};
+use dustoff::scan::{Finding, apply_no_commands, dedupe_overlaps, running_processes, scan_rules};
 use dustoff::{orphans, pkgmgr, projects, rules};
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
@@ -116,7 +116,7 @@ fn gather(sel: &Select) -> Result<Vec<Finding>> {
         all.extend(orphan_hits);
     }
     if sel.no_commands {
-        all.iter_mut().for_each(|f| f.via_command = None);
+        all = apply_no_commands(all);
     }
     let mut all = dedupe_overlaps(all);
     let min = sel.min_size.saturating_mul(1024 * 1024);
