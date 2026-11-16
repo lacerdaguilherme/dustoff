@@ -157,6 +157,12 @@ pub fn execute(selected: &[&Finding], home: &Path, running: &HashSet<String>) ->
             error: None,
             warning: None,
         };
+        if !f.privileged.is_empty() {
+            // never run sudo: the caller prints the commands for the user
+            outcome.warning = Some("needs root: run the commands printed below yourself".into());
+            out.push(outcome);
+            continue;
+        }
         let depth = if f.category == "orphan-config" { 1 } else { 2 };
         if f.blocked_by.is_some() || !all_paths(f).all(|p| is_safe_target_depth(p, home, depth)) {
             outcome.error = Some("refused: blocked or outside the safe area".into());
@@ -214,6 +220,7 @@ mod tests {
             via_command: None,
             also_paths: Vec::new(),
             guards: Vec::new(),
+            privileged: Vec::new(),
         }
     }
 
@@ -350,5 +357,19 @@ mod tests {
                 .is_some()
         );
         assert!(p.exists());
+    }
+
+    #[test]
+    fn privileged_items_are_never_executed_only_reported() {
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("keep"), b"x").unwrap();
+        let mut f = item(Risk::Safe, false);
+        f.path = outside.path().to_path_buf();
+        f.privileged = vec![vec!["sudo".into(), "rm".into(), "-rf".into(), "/".into()]];
+        let out = execute(&[&f], home.path(), &HashSet::new());
+        assert!(out[0].error.is_none());
+        assert!(out[0].warning.as_deref().unwrap().contains("needs root"));
+        assert!(outside.path().join("keep").exists());
     }
 }

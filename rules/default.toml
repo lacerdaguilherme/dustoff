@@ -202,3 +202,11 @@ paths = [
 ]
 regrows = "Rebuilt on next launch."
 skip_if_running = ["code"]
+
+[[rule]]
+id = "flatpak-app-caches"
+name = "Flatpak app caches"
+category = "desktop"
+risk = "safe"
+paths = ["~/.var/app/*/cache"]
+regrows = "Each app rebuilds its cache when used."

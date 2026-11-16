@@ -30,6 +30,9 @@ pub struct Finding {
     pub also_paths: Vec<PathBuf>,
     /// Process names that must not be running when this item is removed.
     pub guards: Vec<String>,
+    /// Commands that need root. dustoff never runs `sudo`; it prints these
+    /// for the user to run.
+    pub privileged: Vec<Vec<String>>,
 }
 
 fn ser_path<S: serde::Serializer>(p: &Path, s: S) -> Result<S::Ok, S::Error> {
@@ -158,6 +161,7 @@ pub fn scan_rules(rules: &[Rule], home: &Path, running: &HashSet<String>) -> Vec
                 via_command: via.clone(),
                 also_paths: paths.collect(),
                 guards: rule.skip_if_running.clone(),
+                privileged: Vec::new(),
             });
         }
     }
@@ -223,6 +227,7 @@ mod tests {
             via_command: None,
             also_paths: Vec::new(),
             guards: Vec::new(),
+            privileged: Vec::new(),
         }
     }
 

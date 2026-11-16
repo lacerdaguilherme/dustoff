@@ -170,6 +170,7 @@ pub fn scan_projects(root: &Path, home: &Path, older_than_days: Option<u64>) -> 
             via_command: None,
             also_paths: Vec::new(),
             guards: Vec::new(),
+            privileged: Vec::new(),
         });
     }
     out.sort_by_key(|a| std::cmp::Reverse(a.bytes));
