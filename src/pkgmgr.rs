@@ -9,10 +9,10 @@ use crate::rules::Risk;
 use crate::safety::clean_text;
 use crate::scan::{Finding, path_size};
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const FLATPAK: &str = "/usr/bin/flatpak";
 const SCRIPT: &str = "/usr/bin/script";
@@ -116,20 +116,34 @@ fn preview_unused(installation: &str) -> Option<String> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let pid = child.id();
     let mut stdin = child.stdin.take()?;
-    // watchdog: never hang the scan
-    std::thread::spawn(move || {
-        std::thread::sleep(PREVIEW_TIMEOUT);
-        let _ = Command::new("/bin/kill")
-            .args(["-9", &pid.to_string()])
-            .status();
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
     });
     let answers = "n\n".repeat(200);
     let _ = stdin.write_all(answers.as_bytes());
     drop(stdin);
-    let out = child.wait_with_output().ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    // Never hang the scan: poll our own child handle (no raw-PID kill, so a
+    // reused PID can never be hit) and kill it if it overruns.
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if start.elapsed() < PREVIEW_TIMEOUT => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+        }
+    }
+    let out = reader.join().ok()?;
+    Some(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// `(id, branch)` -> installed bytes for one installation.

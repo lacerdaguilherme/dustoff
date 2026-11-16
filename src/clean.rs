@@ -163,6 +163,12 @@ pub fn execute(selected: &[&Finding], home: &Path, running: &HashSet<String>) ->
             out.push(outcome);
             continue;
         }
+        if f.category == "package-manager" && f.via_command.is_none() {
+            outcome.error =
+                Some("refused: package-manager items are only cleaned by their own command".into());
+            out.push(outcome);
+            continue;
+        }
         let depth = if f.category == "orphan-config" { 1 } else { 2 };
         if f.blocked_by.is_some() || !all_paths(f).all(|p| is_safe_target_depth(p, home, depth)) {
             outcome.error = Some("refused: blocked or outside the safe area".into());
@@ -371,5 +377,18 @@ mod tests {
         assert!(out[0].error.is_none());
         assert!(out[0].warning.as_deref().unwrap().contains("needs root"));
         assert!(outside.path().join("keep").exists());
+    }
+
+    #[test]
+    fn package_manager_item_without_command_is_never_deleted() {
+        let home = tempfile::tempdir().unwrap();
+        let p = home.path().join(".local/share/flatpak");
+        std::fs::create_dir_all(p.join("app")).unwrap();
+        let mut f = item(Risk::Safe, false);
+        f.category = "package-manager".into();
+        f.path = p.clone();
+        let out = execute(&[&f], home.path(), &HashSet::new());
+        assert!(out[0].error.is_some());
+        assert!(p.join("app").exists());
     }
 }
